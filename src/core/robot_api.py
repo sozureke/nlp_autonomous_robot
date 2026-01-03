@@ -14,6 +14,15 @@ class RobotState:
 	obstacle_left: bool
 	obstacle_right: bool
 
+	def __post_init__(self) -> None:
+		"""Validate RobotState fields."""
+	
+		if self.distance_front < 0:
+			raise ValueError("distance_front must be non-negative")
+		if not isinstance(self.obstacle_left, bool):
+			raise TypeError("obstacle_left must be a boolean")
+		if not isinstance(self.obstacle_right, bool):
+			raise TypeError("obstacle_right must be a boolean")
 
 class BaseRobot(ABC):
 	"""
@@ -37,11 +46,11 @@ class BaseRobot(ABC):
 		Command the robot to stop.
 		"""
 		pass
-
+	
 
 	@abstractmethod
 	def get_state(self) -> RobotState:
-		"""""
+		"""
 		Get the current state of the robot.
 
 		Returns:
