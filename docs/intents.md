@@ -1,3 +1,15 @@
+MOVE_UNTIL_OBSTACLE
+Робот движется вперёд, пока не обнаружит препятствие впереди, затем останавливается.
+
+Parameters
+Name	Type	Required	Default	Description speed	float	no	0.5	Линейная скорость движения
+distance_threshold	float	no	0.3	Минимальная дистанция до препятствия (м) Behaviour (High-Level) робот движется вперёд постоянно проверяет состояние мира при обнаружении препятствия ближе порога — останавливается
+
+Example Commands
+“Move forward until you see an obstacle”
+“Go ahead and stop before the wall”
+“Drive straight until something blocks the way”
+
 STOP_AT_DISTANCE
 Робот движется вперёд и останавливается на заданной дистанции от препятствия.
 
