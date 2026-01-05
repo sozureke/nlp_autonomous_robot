@@ -135,27 +135,6 @@ Intent( type=IntentType.MOVE_UNTIL_OBSTACLE, speed=0.5, threshold=0.3 )`
 - [ ] используется явная World Model.
 
 ### Development Order
-#### Phase 5: SimRobot
-**Файлы:** `src/sim/sim_robot.py`, `src/sim/world.py`
-
-**Задачи:**
-- [ ] Создать простую 2D модель мира (`World` класс)
-- [ ] Реализовать физику движения (позиция, скорость, поворот)
-- [ ] Реализовать симуляцию сенсоров (расстояние до препятствий)
-- [ ] Реализовать `BaseRobot` интерфейс в `SimRobot`
-- [ ] Добавить логирование состояния
-- [ ] Написать тесты симуляции
-
-**Критерий завершения:**
-- `SimRobot` полностью реализует `BaseRobot`
-- Симуляция работает с planner без изменений кода planner
-- Можно визуализировать движение робота
-- Тесты проходят
-
-**Зависимости:** Phase 1 (Robot API), Phase 3 (Planner)
-
----
-
 #### Phase 6: RealRobot
 **Файл:** `src/real/real_robot.py`
 
