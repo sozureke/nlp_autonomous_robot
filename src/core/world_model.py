@@ -6,8 +6,18 @@ class WorldModel:
 	"""
 
 	def __init__(self, obstacle_threshold: float = 0.5) -> None:
+		"""
+		Initialize world model.
+		
+		Parameters:
+			obstacle_threshold: Distance threshold for obstacle detection in meters.
+		"""
 		self._obstacle_threshold = obstacle_threshold
-		self._current_state: RobotState | None = None
+		self._current_state = RobotState(
+			distance_front=float('inf'),
+			obstacle_left=False,
+			obstacle_right=False
+		)
 
 	def update(self, robot_state: RobotState) -> None:
 		"""
@@ -22,9 +32,6 @@ class WorldModel:
 		"""
 		Check if there is an obstacle ahead.
 		"""
-		if self._current_state is None:
-			raise RuntimeError("World model not initialized")
-
 		return (
 			self._current_state.distance_front != float("inf") and
 			self._current_state.distance_front <= self._obstacle_threshold
@@ -35,9 +42,6 @@ class WorldModel:
 		"""
 		Get the distance to the nearest obstacle.
 		"""
-		if self._current_state is None:
-			raise RuntimeError("World model not initialized")
-
 		return self._current_state.distance_front
 
 	
@@ -45,7 +49,6 @@ class WorldModel:
 		"""
 		Check if the front is blocked.
 		"""
-		
 		return self.is_obstacle_ahead()
 
 
@@ -53,19 +56,12 @@ class WorldModel:
 		"""
 		Check if the left is blocked.
 		"""
-		if self._current_state is None:
-			raise RuntimeError("World model not initialized")
-
 		return self._current_state.obstacle_left
 
 	def is_right_blocked(self) -> bool:
 		"""
 		Check if the right is blocked.
 		"""
-
-		if self._current_state is None:
-			raise RuntimeError("World model not initialized")
-
 		return self._current_state.obstacle_right
 
 

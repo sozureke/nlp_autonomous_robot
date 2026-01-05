@@ -1,8 +1,12 @@
 import math
 import time
+import logging
 
 from src.core.robot_api import BaseRobot, RobotState
 from src.sim.world import World
+
+logger = logging.getLogger(__name__)
+
 
 class SimRobot(BaseRobot):
 	"""
@@ -20,6 +24,7 @@ class SimRobot(BaseRobot):
 		sensor_range: float = 5.0,
 		obstacle_threshold: float = 0.3,
 		update_rate: float = 20.0,
+		robot_radius: float = 0.1,
 	) -> None:
 		"""
 		Initialize simulated robot.
@@ -34,6 +39,7 @@ class SimRobot(BaseRobot):
 			sensor_range: Maximum sensor range in meters.
 			obstacle_threshold: Distance threshold for obstacle detection in meters.
 			update_rate: Physics update rate in Hz.
+			robot_radius: Robot collision radius in meters (for collision detection).
 		"""
 		self._world = world
 		self._x = initial_x
@@ -43,12 +49,20 @@ class SimRobot(BaseRobot):
 		self._max_angular_velocity = max_angular_velocity
 		self._sensor_range = sensor_range
 		self._obstacle_threshold = obstacle_threshold
+		self._robot_radius = robot_radius
 		self._update_period = 1.0 / update_rate
 
 		self._linear_velocity = 0.0
 		self._angular_velocity = 0.0
 		
-		self._last_update_time = time.time()
+		# Use monotonic time for better precision and immunity to clock adjustments
+		self._last_update_time = time.monotonic()
+		
+		# Check initial position is valid
+		if self._check_collision(self._x, self._y):
+			logger.warning(
+				f"Robot initialized inside obstacle at ({initial_x:.2f}, {initial_y:.2f})"
+			)
 
 
 	def move(self, linear: float, angular: float) -> None:
@@ -113,26 +127,64 @@ class SimRobot(BaseRobot):
 				
 		return state
 
+	def _check_collision(self, x: float, y: float) -> bool:
+		"""
+		Check if a position would cause a collision with obstacles.
+		
+		Parameters:
+			x: X coordinate to check.
+			y: Y coordinate to check.
+		
+		Returns:
+			True if collision detected, False otherwise.
+		"""
+		# Check collision with all obstacles
+		for obstacle in self._world.get_obstacles():
+			# Expand obstacle by robot radius for collision detection
+			expanded_x_min = obstacle.x_min - self._robot_radius
+			expanded_y_min = obstacle.y_min - self._robot_radius
+			expanded_x_max = obstacle.x_max + self._robot_radius
+			expanded_y_max = obstacle.y_max + self._robot_radius
+			
+			if (expanded_x_min <= x <= expanded_x_max and 
+				expanded_y_min <= y <= expanded_y_max):
+				return True
+		return False
+
 	def _update_physics(self) -> None:
-		"""Update robot physics based on current velocities."""
-		current_time = time.time()
+		"""Update robot physics based on current velocities with collision detection."""
+		current_time = time.monotonic()
 		dt = current_time - self._last_update_time
 		
 		if dt < self._update_period:
 			return
 		
-		# Update orientation
+		# Update orientation (rotation doesn't cause collisions)
 		angular_velocity_rad = self._angular_velocity * self._max_angular_velocity
 		self._theta += angular_velocity_rad * dt
 		self._theta = math.atan2(math.sin(self._theta), math.cos(self._theta))  # Normalize to [-pi, pi]
 		
-		# Update position
+		# Calculate new position
 		linear_velocity_ms = self._linear_velocity * self._max_linear_velocity
 		dx = linear_velocity_ms * math.cos(self._theta) * dt
 		dy = linear_velocity_ms * math.sin(self._theta) * dt
 		
-		self._x += dx
-		self._y += dy
+		new_x = self._x + dx
+		new_y = self._y + dy
+		
+		# Check for collision before updating position
+		if self._check_collision(new_x, new_y):
+			# Collision detected - stop movement
+			logger.warning(
+				f"Collision detected at ({new_x:.2f}, {new_y:.2f}). "
+				f"Stopping movement from ({self._x:.2f}, {self._y:.2f})"
+			)
+			self._linear_velocity = 0.0
+			self._angular_velocity = 0.0
+		else:
+			# Safe to move
+			self._x = new_x
+			self._y = new_y
 		
 		self._last_update_time = current_time
 
