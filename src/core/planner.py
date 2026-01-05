@@ -5,6 +5,7 @@ import time
 
 from src.core.robot_api import BaseRobot
 from src.core.world_model import WorldModel
+from src.core.types import Condition, TurnDirection
 
 class IntentType(Enum):
 	"""Types of supported intents types."""
@@ -24,9 +25,9 @@ class Intent:
 		speed: Linear velocity (default: 0.5, range: 0.0-1.0).
 		target_distance: Target distance to obstacle in meters (required for STOP_AT_DISTANCE).
 		condition: Condition to check (required for CONDITIONAL_TURN).
-			Options: "front_blocked", "left_blocked", "right_blocked".
+			Options: Condition Enum (FRONT_BLOCKED, LEFT_BLOCKED, RIGHT_BLOCKED).
 		direction: Turn direction (required for CONDITIONAL_TURN).
-			Options: "left", "right".
+			Options: TurnDirection Enum (LEFT, RIGHT).
 		angular_speed: Angular velocity for turning (default: 0.5, range: 0.0-1.0).
 	"""
 
@@ -34,13 +35,13 @@ class Intent:
 	speed: float = 0.5
 	target_distance: Optional[float] = None
 	distance_threshold: float = 0.3
-	condition: Optional[str] = None
-	direction: Optional[str] = None
+	condition: Optional[Condition] = None
+	direction: Optional[TurnDirection] = None
 	angular_speed: float = 0.5
 
 	def __post_init__(self) -> None:
 		"""Validate intent parameters."""
-	
+
 		if not 0.0 <= self.speed <= 1.0:
 			raise ValueError(f"speed must be in [0.0, 1.0], got {self.speed}")
 		if not 0.0 <= self.angular_speed <= 1.0:
@@ -57,12 +58,12 @@ class Intent:
 		if self.type == IntentType.CONDITIONAL_TURN:
 			if self.condition is None:
 				raise ValueError("condition is required for CONDITIONAL_TURN intent")
-			if self.condition not in ["front_blocked", "left_blocked", "right_blocked"]:
-				raise ValueError(f"condition must be one of: front_blocked, left_blocked, right_blocked, got {self.condition}")
+			if not isinstance(self.condition, Condition):
+				raise ValueError(f"condition must be a Condition enum, got {self.condition!r}")
 			if self.direction is None:
 				raise ValueError("direction is required for CONDITIONAL_TURN intent")
-			if self.direction not in ["left", "right"]:
-				raise ValueError(f"direction must be 'left' or 'right', got {self.direction}")
+			if not isinstance(self.direction, TurnDirection):
+				raise ValueError(f"direction must be a TurnDirection enum, got {self.direction!r}")
 
 
 class Planner:
@@ -84,7 +85,6 @@ class Planner:
 		self._control_period = 1.0 / control_rate
 		self._is_running = False
 
-
 	def execute_intent(self, intent: Intent) -> None:
 		self._is_running = True
 
@@ -101,15 +101,23 @@ class Planner:
 			self._is_running = False
 			self._robot.stop()
 
-	def _move_forward_until(self, speed: float, stop_condition: Callable[[], bool]) -> None:
+	def _move_forward_until(self, speed: float, stop_condition: Callable[[], bool], max_duration: Optional[float] = 10.0) -> None:
 		"""
-		Common control loop for moving forward until a condition is met.
+		Common control loop for moving forward until a condition is met,
+		with a safety break for max_duration (watchdog).
 
 		Parameters:
 			speed: Linear velocity to move forward.
 			stop_condition: Function that returns True when robot should stop.
+			max_duration: Maximum time to spend in the control loop (seconds, default: 10.0).
 		"""
+		start_time = time.time()
 		while self._is_running:
+			cur_time = time.time()
+			if max_duration is not None and (cur_time - start_time) > max_duration:
+				self._robot.stop()
+				break
+
 			robot_state = self._robot.get_state()
 			self._world_model.update(robot_state)
 			
@@ -155,21 +163,21 @@ class Planner:
 
 		self._move_forward_until(intent.speed, should_stop)
 
-	def _check_condition(self, condition: str) -> bool:
+	def _check_condition(self, condition: Condition) -> bool:
 		"""
 		Check a condition based on world model state.
 
 		Parameters:
-			condition: Condition to check ("front_blocked", "left_blocked", "right_blocked").
+			condition: Condition to check (Condition Enum: FRONT_BLOCKED, LEFT_BLOCKED, RIGHT_BLOCKED).
 
 		Returns:
 			True if condition is met, False otherwise.
 		"""
-		if condition == "front_blocked":
+		if condition == Condition.FRONT_BLOCKED:
 			return self._world_model.is_front_blocked()
-		elif condition == "left_blocked":
+		elif condition == Condition.LEFT_BLOCKED:
 			return self._world_model.is_left_blocked()
-		elif condition == "right_blocked":
+		elif condition == Condition.RIGHT_BLOCKED:
 			return self._world_model.is_right_blocked()
 		else:
 			raise ValueError(f"Unknown condition: {condition}")
@@ -186,6 +194,10 @@ class Planner:
 		"""
 		if intent.condition is None or intent.direction is None:
 			raise ValueError("condition and direction are required for CONDITIONAL_TURN")
+		if not isinstance(intent.condition, Condition):
+			raise ValueError("condition must be a Condition enum for CONDITIONAL_TURN")
+		if not isinstance(intent.direction, TurnDirection):
+			raise ValueError("direction must be a TurnDirection enum for CONDITIONAL_TURN")
 
 		robot_state = self._robot.get_state()
 		self._world_model.update(robot_state)
@@ -194,7 +206,7 @@ class Planner:
 		
 		if condition_met:
 			# Determine angular velocity direction (Positive = left, Negative = right)
-			angular_velocity = intent.angular_speed if intent.direction == "left" else -intent.angular_speed
+			angular_velocity = intent.angular_speed if intent.direction == TurnDirection.LEFT else -intent.angular_speed
 			
 			self._robot.move(linear=0.0, angular=angular_velocity)
 			
