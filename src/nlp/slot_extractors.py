@@ -1,6 +1,6 @@
 from typing import Optional
 
-from src.core.world_model import Condition, TurnDirection
+from src.core.types import Condition, TurnDirection
 from .lexicon import (
     SPEED_WORDS,
     DISTANCE_UNITS,
