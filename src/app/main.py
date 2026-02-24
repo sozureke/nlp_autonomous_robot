@@ -32,11 +32,16 @@ def main():
             memory_state = memory.to_dict()
 
             # Natural language -> structured intent.
-            intent = translator.infer_intent(
-                text,
-                world_state=world_state,
-                memory=memory_state,
-            )
+            try:
+                intent = translator.infer_intent(
+                    text,
+                    world_state=world_state,
+                    memory=memory_state,
+                )
+            except Exception as e:
+                # Network / API failure: fall back to local rule-based intent.
+                print(f"LLM error, falling back to heuristic intent: {e}")
+                intent = translator._rule_based_fallback(text)  # type: ignore[attr-defined]
 
             cmd = intent.to_command_dict()
 

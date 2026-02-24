@@ -23,6 +23,9 @@ class Action(str, Enum):
 
     MOVE_FORWARD = "move_forward"
     STOP = "stop"
+    TURN_LEFT = "turn_left"
+    TURN_RIGHT = "turn_right"
+    SCAN_360 = "scan_360"
 
 
 class Until(str, Enum):
@@ -124,7 +127,7 @@ class LLMIntentTranslator:
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["move_forward", "stop"],
+                        "enum": ["move_forward", "stop", "turn_left", "turn_right", "scan_360"],
                     },
                     "speed": {
                         "type": "number",
@@ -226,9 +229,18 @@ class LLMIntentTranslator:
         """
         text = command.lower()
 
-        if any(w in text for w in ["stop", "halt", "freeze"]):
-            return ExternalIntentModel(action=Action.STOP)
+        # turning
+        if any(phrase in text for phrase in ["turn left", "rotate left", "spin left", "left turn"]):
+            return ExternalIntentModel(action=Action.TURN_LEFT, speed=0.5)
 
+        if any(phrase in text for phrase in ["turn right", "rotate right", "spin right", "right turn"]):
+            return ExternalIntentModel(action=Action.TURN_RIGHT, speed=0.5)
+
+        # 360 / scan
+        if any(phrase in text for phrase in ["scan", "look around", "360", "full turn"]):
+            return ExternalIntentModel(action=Action.SCAN_360, speed=0.5)
+
+        # forward / move
         if any(w in text for w in ["forward", "ahead", "go", "move"]):
             until = None
             if any(phrase in text for phrase in ["until obstacle", "until you see something"]):
@@ -240,7 +252,11 @@ class LLMIntentTranslator:
                 until=until,
             )
 
-        # Absolute safe default: stop.
+        # stop / halt
+        if any(w in text for w in ["stop", "halt", "freeze"]):
+            return ExternalIntentModel(action=Action.STOP)
+
+        # Absolute safe default: do nothing (stop).
         return ExternalIntentModel(action=Action.STOP)
 
 

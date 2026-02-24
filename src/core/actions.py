@@ -72,11 +72,15 @@ class RobotActions:
         """
         self.robot.stop()
 
-    def scan(self) -> None:
+    def scan_360(self, angular_speed: float = 0.5) -> None:
         """
-        Simple 360-like scan in place to sample the environment.
+        Perform an approximate 360-degree scan in place to sample the environment.
         """
-        self.turn_left(angular_speed=0.5, duration=1.0)
+        
+        full_turn_duration = 5.0
+        self.robot.move(linear=0.0, angular=angular_speed)
+        time.sleep(full_turn_duration)
+        self.stop()
 
     def inspect_object(self) -> None:
         """
