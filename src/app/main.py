@@ -1,25 +1,42 @@
-from src.real.real_robot import RealRobot
+from src.real.real_robot import RealRobot, RobotConnectionError
 from src.core.world_model import WorldModel
 from src.core.planner import Planner
 from src.core.control_api import ControlAPI
+from src.core.direct_executor import DirectExecutor
 from src.core.executor import RobotExecutor
+from src.core.safety_controller import SafetyController
 from src.memory.memory import ShortTermMemory
+from src.nlp.intent_parser import IntentParser
 from src.nlp.llm_agent import build_default_translator
 
 
-def main():
-    robot = RealRobot()
-    world = WorldModel()
-    planner = Planner(robot, world)
+MODES = {
+    "1": ("llm", "LLM + task planner + safety"),
+    "2": ("rules", "Rule-based parser + planner"),
+    "3": ("direct", "LLM plan, direct execution (no safety)"),
+}
 
-    control = ControlAPI(planner=planner)
-    executor = RobotExecutor(control=control)
 
-    memory = ShortTermMemory()
-    translator = build_default_translator()
+def choose_mode() -> str:
+    print("Select mode:")
+    for key, (_, desc) in MODES.items():
+        print(f"  [{key}] {desc}")
 
-    print("LLM control ready. Type commands (or 'exit').")
+    while True:
+        choice = input("Choice (1/2/3) [1]: ").strip() or "1"
+        if choice in MODES:
+            return MODES[choice][0]
+        print("Enter 1, 2, or 3.")
 
+
+def run_llm_loop(
+    planner: Planner,
+    executor: RobotExecutor,
+    translator,
+    world: WorldModel,
+    memory: ShortTermMemory,
+) -> None:
+    print("LLM mode. Type commands (or 'exit').")
     while True:
         try:
             text = input("> ").strip()
@@ -27,40 +44,122 @@ def main():
                 planner.stop()
                 break
 
-            # Build context for the LLM.
             world_state = world.to_dict()
             memory_state = memory.to_dict()
+            plan = translator.infer_plan(text, world_state=world_state, memory=memory_state)
 
-            # Natural language -> structured intent.
-            try:
-                intent = translator.infer_intent(
-                    text,
-                    world_state=world_state,
-                    memory=memory_state,
-                )
-            except Exception as e:
-                # Network / API failure: fall back to local rule-based intent.
-                print(f"LLM error, falling back to heuristic intent: {e}")
-                intent = translator._rule_based_fallback(text)  # type: ignore[attr-defined]
+            if not plan:
+                print("No steps to run.")
+                continue
 
-            cmd = intent.to_command_dict()
-
-            # Update internal world state and memory about the chosen action.
-            world.set_internal_state(moving=True, last_action=cmd.get("action"))
-            memory.add_action_event("llm_intent", payload=cmd)
-
-            # Execute via the unified executor stack.
-            executor.execute_llm_intent(intent)
-
-            # After execution, mark robot as not moving.
+            world.set_internal_state(moving=True, last_action="plan")
+            memory.add_action_event("llm_plan", payload={"steps": plan})
+            executor.execute_plan(plan)
             world.set_internal_state(moving=False)
 
         except KeyboardInterrupt:
             planner.stop()
             print("\nStopped.")
             break
+        except RobotConnectionError as e:
+            print(f"Robot connection error: {e}")
         except Exception as e:
             print(f"Error: {e}")
+
+
+def run_rules_loop(planner: Planner, parser: IntentParser) -> None:
+    print("Rules mode. Type commands (or 'exit').")
+    while True:
+        try:
+            text = input("> ").strip()
+            if text in {"exit", "quit"}:
+                planner.stop()
+                break
+
+            intent = parser.parse(text)
+            planner.execute_intent(intent)
+
+        except KeyboardInterrupt:
+            planner.stop()
+            print("\nStopped.")
+            break
+        except ValueError as e:
+            print(f"Command not supported in rules mode: {e}")
+        except RobotConnectionError as e:
+            print(f"Robot connection error: {e}")
+        except Exception as e:
+            print(f"Error: {e}")
+
+
+def run_direct_loop(
+    planner: Planner,
+    direct_executor: DirectExecutor,
+    translator,
+    world: WorldModel,
+    memory: ShortTermMemory,
+) -> None:
+    print("Direct mode (no safety). Type commands (or 'exit').")
+    while True:
+        try:
+            text = input("> ").strip()
+            if text in {"exit", "quit"}:
+                planner.stop()
+                break
+
+            world_state = world.to_dict()
+            memory_state = memory.to_dict()
+            plan = translator.infer_plan(text, world_state=world_state, memory=memory_state)
+
+            if not plan:
+                print("No steps to run.")
+                continue
+
+            result = direct_executor.execute_plan(plan)
+            if result["safety_violations"]:
+                print(
+                    f"(Recorded {result['safety_violations']} safety violation(s) — obstacle ahead.)"
+                )
+
+        except KeyboardInterrupt:
+            planner.stop()
+            print("\nStopped.")
+            break
+        except RobotConnectionError as e:
+            print(f"Robot connection error: {e}")
+        except Exception as e:
+            print(f"Error: {e}")
+
+
+def main():
+    try:
+        robot = RealRobot()
+    except RobotConnectionError as e:
+        print(f"Robot connection error: {e}")
+        return
+    world = WorldModel()
+    planner = Planner(robot, world)
+    mode = choose_mode()
+
+    if mode == "llm":
+        control = ControlAPI(planner=planner)
+        memory = ShortTermMemory()
+        safety = SafetyController()
+        executor = RobotExecutor(
+            control=control,
+            memory=memory,
+            safety_controller=safety,
+            world_model=world,
+        )
+        translator = build_default_translator()
+        run_llm_loop(planner, executor, translator, world, memory)
+    elif mode == "rules":
+        parser = IntentParser()
+        run_rules_loop(planner, parser)
+    else:
+        memory = ShortTermMemory()
+        translator = build_default_translator()
+        direct_executor = DirectExecutor(robot=robot, world=world)
+        run_direct_loop(planner, direct_executor, translator, world, memory)
 
 
 if __name__ == "__main__":

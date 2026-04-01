@@ -1,6 +1,6 @@
-from .real_robot import RealRobot
+from .real_robot import RealRobot, RobotConnectionError
 
-__all__ = ["RealRobot"]
+__all__ = ["RealRobot", "RobotConnectionError"]
 
 
 

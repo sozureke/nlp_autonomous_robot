@@ -8,6 +8,11 @@ from src.core.robot_api import BaseRobot
 from src.core.world_model import WorldModel
 from src.core.types import Condition, TurnDirection
 
+try:
+    from src.real.real_robot import RobotConnectionError
+except ImportError:
+    RobotConnectionError = type("RobotConnectionError", (Exception,), {})  # no-op if real not installed
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,6 +94,8 @@ class Planner:
             raise
 
         except Exception as e:
+            if isinstance(e, RobotConnectionError):
+                raise  # Let main print the clear connection-lost message
             logger.error(f"Error executing intent {intent.type}: {e}")
             raise
 
@@ -97,7 +104,10 @@ class Planner:
             try:
                 self._robot.stop()
             except Exception as e:
-                logger.error(f"Error stopping robot: {e}")
+                if isinstance(e, RobotConnectionError):
+                    logger.warning("Connection lost, could not send stop.")
+                else:
+                    logger.error(f"Error stopping robot: {e}")
 
     def _move_forward_until(
         self,
