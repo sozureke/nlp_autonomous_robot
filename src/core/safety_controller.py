@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -12,7 +13,7 @@ class SafetyController:
     """
 
     max_speed: float = 0.8
-    min_distance_for_move_forward: float = 0.4
+    min_distance_for_move_forward: float = 0.08
 
     def apply(self, cmd: Dict[str, Any], world_state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -34,17 +35,13 @@ class SafetyController:
                 out["speed"] = 0.5
 
         if action == "move_forward" and world_state:
-            derived = world_state.get("derived") or {}
             sensors = world_state.get("sensors") or {}
-
-            obstacle = derived.get("obstacle", False)
-            path_clear = derived.get("path_clear", True)
             distance = sensors.get("distance_front", float("inf"))
 
-            if isinstance(distance, (int, float)) and distance == float("inf"):
-                distance = 999.0
+            if isinstance(distance, (int, float)) and math.isinf(distance):
+                return out
 
-            if obstacle or not path_clear or distance < self.min_distance_for_move_forward:
+            if isinstance(distance, (int, float)) and distance < self.min_distance_for_move_forward:
                 return {"action": "stop"}
 
         return out

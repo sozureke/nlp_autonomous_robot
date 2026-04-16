@@ -9,7 +9,6 @@ from ..core.robot_api import BaseRobot, RobotState
 
 load_dotenv()
 
-# Ports to try when ROBOT_SERIAL_PORT is not set (order matters)
 DEFAULT_PORTS = ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyACM0"]
 
 
@@ -165,8 +164,10 @@ class RealRobot(BaseRobot):
                 if line.startswith("D"):
                     try:
                         _, dist, ir_l, ir_r = line.split()
+                        dist_cm = float(dist)
+                        distance_front_m = float("inf") if dist_cm >= 999.0 else dist_cm / 100.0
                         self._last_state = RobotState(
-                            distance_front=float(dist) / 100.0,
+                            distance_front=distance_front_m,
                             obstacle_left=bool(int(ir_l)),
                             obstacle_right=bool(int(ir_r)),
                         )

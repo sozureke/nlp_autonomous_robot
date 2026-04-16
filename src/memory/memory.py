@@ -77,3 +77,15 @@ class ShortTermMemory:
             }
         )
 
+    def events_since(self, offset: int = 0, limit: Optional[int] = None) -> List[Event]:
+        """
+        Return events from offset with optional limit.
+        """
+        events = list(self._events)
+        if offset < 0:
+            offset = 0
+        sliced = events[offset:]
+        if limit is not None:
+            return sliced[:limit]
+        return sliced
+

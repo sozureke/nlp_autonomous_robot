@@ -1,6 +1,6 @@
 from enum import Enum
 from dataclasses import dataclass
-from typing import Optional, Callable
+from typing import Optional, Callable, Literal
 import time
 import logging
 
@@ -14,6 +14,18 @@ except ImportError:
     RobotConnectionError = type("RobotConnectionError", (Exception,), {})  # no-op if real not installed
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PlannerInterruptionSignal:
+    reason: str
+    distance_m: float
+
+
+@dataclass
+class PlannerExecutionResult:
+    status: Literal["completed", "interrupted"] = "completed"
+    interruption: Optional[PlannerInterruptionSignal] = None
 
 
 class IntentType(Enum):
@@ -69,7 +81,7 @@ class Planner:
         self._default_timeout = default_timeout
         self._is_running = False
 
-    def execute_intent(self, intent: Intent) -> None:
+    def execute_intent(self, intent: Intent) -> PlannerExecutionResult:
         if self._is_running:
             self.stop()
             time.sleep(0.1)
@@ -87,7 +99,10 @@ class Planner:
                 raise RuntimeError(f"Unsupported intent type: {intent.type}")
 
             logger.info(f"Executing intent: {intent.type}")
-            handler(intent)
+            result = handler(intent)
+            if isinstance(result, PlannerExecutionResult):
+                return result
+            return PlannerExecutionResult(status="completed")
 
         except KeyboardInterrupt:
             logger.info("Intent interrupted by user")
@@ -108,43 +123,54 @@ class Planner:
                     logger.warning("Connection lost, could not send stop.")
                 else:
                     logger.error(f"Error stopping robot: {e}")
+        return PlannerExecutionResult(status="completed")
 
     def _move_forward_until(
         self,
         speed: float,
         stop_condition: Callable[[], bool],
         timeout: Optional[float],
-    ) -> None:
+    ) -> tuple[str, float]:
         start = time.monotonic()
 
         while self._is_running:
             if timeout and time.monotonic() - start > timeout:
                 logger.warning("Control loop timeout")
-                break
+                return "timeout", self._world_model.get_distance_to_obstacle()
 
             state = self._robot.get_state()
             self._world_model.update(state)
 
             if stop_condition():
-                break
+                return "condition_met", self._world_model.get_distance_to_obstacle()
 
             self._robot.move(linear=speed, angular=0.0)
             time.sleep(self._control_period)
 
         self._robot.stop()
+        return "stopped", self._world_model.get_distance_to_obstacle()
 
-    def _handle_move_until_obstacle(self, intent: Intent) -> None:
+    def _handle_move_until_obstacle(self, intent: Intent) -> PlannerExecutionResult:
         def should_stop() -> bool:
             return (
                 self._world_model.get_distance_to_obstacle()
                 <= intent.distance_threshold
             )
 
-        self._move_forward_until(
+        stop_reason, distance = self._move_forward_until(
             speed=intent.speed,
             stop_condition=should_stop,
             timeout=self._default_timeout,
         )
+        if stop_reason == "condition_met":
+            return PlannerExecutionResult(
+                status="interrupted",
+                interruption=PlannerInterruptionSignal(
+                    reason="obstacle_detected",
+                    distance_m=distance,
+                ),
+            )
+        return PlannerExecutionResult(status="completed")
 
     def _handle_stop_at_distance(self, intent: Intent) -> None:
         original = self._world_model.get_obstacle_threshold()

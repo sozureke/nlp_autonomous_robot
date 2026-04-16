@@ -1,13 +1,11 @@
-from src.real.real_robot import RealRobot, RobotConnectionError
-from src.core.world_model import WorldModel
-from src.core.planner import Planner
-from src.core.control_api import ControlAPI
 from src.core.direct_executor import DirectExecutor
 from src.core.executor import RobotExecutor
-from src.core.safety_controller import SafetyController
+from src.core.planner import Planner
+from src.core.world_model import WorldModel
 from src.memory.memory import ShortTermMemory
 from src.nlp.intent_parser import IntentParser
-from src.nlp.llm_agent import build_default_translator
+from src.real.real_robot import RobotConnectionError
+from src.app.runtime import build_runtime
 
 
 MODES = {
@@ -53,8 +51,8 @@ def run_llm_loop(
                 continue
 
             world.set_internal_state(moving=True, last_action="plan")
-            memory.add_action_event("llm_plan", payload={"steps": plan})
-            executor.execute_plan(plan)
+            memory.add_action_event("llm_plan", payload={"command": text, "steps": plan})
+            executor.execute_task(raw_command=text, plan=plan)
             world.set_internal_state(moving=False)
 
         except KeyboardInterrupt:
@@ -132,34 +130,33 @@ def run_direct_loop(
 
 def main():
     try:
-        robot = RealRobot()
+        runtime = build_runtime()
     except RobotConnectionError as e:
         print(f"Robot connection error: {e}")
         return
-    world = WorldModel()
-    planner = Planner(robot, world)
+
+    world = runtime.world
+    planner = runtime.planner
     mode = choose_mode()
 
     if mode == "llm":
-        control = ControlAPI(planner=planner)
-        memory = ShortTermMemory()
-        safety = SafetyController()
-        executor = RobotExecutor(
-            control=control,
-            memory=memory,
-            safety_controller=safety,
-            world_model=world,
+        run_llm_loop(
+            planner,
+            runtime.executor,
+            runtime.translator,
+            world,
+            runtime.memory,
         )
-        translator = build_default_translator()
-        run_llm_loop(planner, executor, translator, world, memory)
     elif mode == "rules":
-        parser = IntentParser()
-        run_rules_loop(planner, parser)
+        run_rules_loop(planner, runtime.parser)
     else:
-        memory = ShortTermMemory()
-        translator = build_default_translator()
-        direct_executor = DirectExecutor(robot=robot, world=world)
-        run_direct_loop(planner, direct_executor, translator, world, memory)
+        run_direct_loop(
+            planner,
+            runtime.direct_executor,
+            runtime.translator,
+            world,
+            runtime.memory,
+        )
 
 
 if __name__ == "__main__":

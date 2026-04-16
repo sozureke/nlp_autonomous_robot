@@ -312,6 +312,134 @@ class LLMIntentTranslator:
 
         return self._rule_based_fallback_plan(command)
 
+    def build_replan_messages(
+        self,
+        *,
+        original_command: str,
+        obstacle_distance_cm: float,
+        failed_attempts: List[Dict[str, Any]],
+        world_state: Optional[Dict[str, Any]] = None,
+        memory: Optional[Dict[str, Any]] = None,
+    ) -> list[dict[str, str]]:
+        """
+        Specialized prompt for obstacle-avoidance replanning.
+        """
+        step_schema = {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["move_forward", "stop", "turn_left", "turn_right", "scan_360"],
+                },
+                "speed": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                },
+                "until": {
+                    "type": "string",
+                    "enum": ["obstacle_detected"],
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        }
+        schema_description = json.dumps(
+            {
+                "type": "object",
+                "properties": {
+                    "plan": {
+                        "type": "array",
+                        "items": step_schema,
+                        "minItems": 1,
+                    },
+                },
+                "required": ["plan"],
+                "additionalProperties": False,
+            },
+            indent=2,
+        )
+
+        system_content = (
+            "You are a robot obstacle-avoidance replanning assistant.\n"
+            "Your role is to help the robot get around an obstacle and continue the ORIGINAL task.\n\n"
+            "Rules:\n"
+            "- Respond with JSON ONLY. No explanations, markdown, or code fences.\n"
+            "- Return ONLY a `plan` array of actions.\n"
+            "- Use ONLY these actions: move_forward, stop, turn_left, turn_right, scan_360.\n"
+            "- Do NOT repeat previously failed strategies listed in failed_attempts.\n"
+            "- Keep the plan concise and safety-aware.\n\n"
+            "JSON Schema:\n"
+            f"{schema_description}\n"
+        )
+
+        user_payload: Dict[str, Any] = {
+            "original_task": original_command,
+            "event": f"move_forward interrupted: obstacle detected at {obstacle_distance_cm:.1f} cm",
+            "failed_attempts": failed_attempts,
+            "available_actions": [
+                "move_forward",
+                "stop",
+                "turn_left",
+                "turn_right",
+                "scan_360",
+            ],
+        }
+        if world_state is not None:
+            user_payload["world_state"] = world_state
+        if memory is not None:
+            user_payload["memory"] = memory
+
+        return [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ]
+
+    def infer_replan(
+        self,
+        *,
+        original_command: str,
+        obstacle_distance_cm: float,
+        failed_attempts: List[Dict[str, Any]],
+        world_state: Optional[Dict[str, Any]] = None,
+        memory: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate an obstacle-avoidance plan using a specialized replan prompt.
+        """
+        try:
+            messages = self.build_replan_messages(
+                original_command=original_command,
+                obstacle_distance_cm=obstacle_distance_cm,
+                failed_attempts=failed_attempts,
+                world_state=world_state,
+                memory=memory,
+            )
+            raw = self.client.complete(messages)
+        except Exception:
+            return [{"action": "scan_360", "speed": 0.4}, {"action": "turn_left", "speed": 0.5}]
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = self._extract_json_from_text(raw)
+
+        if not data or "plan" not in data or not isinstance(data["plan"], list):
+            return [{"action": "scan_360", "speed": 0.4}, {"action": "turn_left", "speed": 0.5}]
+
+        out: List[Dict[str, Any]] = []
+        for step in data["plan"]:
+            if not isinstance(step, dict):
+                continue
+            try:
+                out.append(_step_to_command_dict(step))
+            except (ValueError, TypeError):
+                continue
+
+        if out:
+            return out
+        return [{"action": "scan_360", "speed": 0.4}, {"action": "turn_left", "speed": 0.5}]
+
     def _extract_json_from_text(self, text: str) -> Optional[Dict[str, Any]]:
         fence_match = re.search(r"```(?:json)?(.*?)```", text, re.DOTALL | re.IGNORECASE)
         if fence_match:

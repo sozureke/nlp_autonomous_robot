@@ -10,7 +10,7 @@ class WorldModel:
     Representation of the robot's local world.
     """
 
-    def __init__(self, obstacle_threshold: float = 0.5) -> None:
+    def __init__(self, obstacle_threshold: float = 0.08) -> None:
         """
         Initialize world model.
 

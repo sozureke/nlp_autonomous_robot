@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypedDict, Optional
 
-from src.core.planner import Planner, Intent, IntentType
+from src.core.planner import Planner, Intent, IntentType, PlannerExecutionResult
 from src.core.actions import RobotActions
 
 
@@ -34,7 +34,7 @@ class ControlAPI:
     planner: Planner
 
     # Default semantic parameters; can be made configurable later.
-    default_distance_threshold: float = 0.3
+    default_distance_threshold: float = 0.08
 
     @property
     def _actions(self) -> RobotActions:
@@ -52,7 +52,7 @@ class ControlAPI:
             )
         return self.__actions
 
-    def execute_json(self, cmd: JsonCommand) -> None:
+    def execute_json(self, cmd: JsonCommand) -> PlannerExecutionResult:
         """
         Execute a high-level JSON command via the underlying planner.
 
@@ -62,19 +62,23 @@ class ControlAPI:
         action = cmd.get("action")
 
         if action == "move_forward":
-            self._handle_move_forward(cmd)
+            return self._handle_move_forward(cmd)
         elif action == "stop":
             self.planner.stop()
+            return PlannerExecutionResult(status="completed")
         elif action == "turn_left":
             self._handle_turn(left=True, cmd=cmd)
+            return PlannerExecutionResult(status="completed")
         elif action == "turn_right":
             self._handle_turn(left=False, cmd=cmd)
+            return PlannerExecutionResult(status="completed")
         elif action == "scan_360":
             self._handle_scan_360(cmd)
+            return PlannerExecutionResult(status="completed")
         else:
             raise ValueError(f"Unsupported action: {action!r}")
 
-    def _handle_move_forward(self, cmd: JsonCommand) -> None:
+    def _handle_move_forward(self, cmd: JsonCommand) -> PlannerExecutionResult:
         speed = float(cmd.get("speed", 0.5))
         until = cmd.get("until")
 
@@ -95,7 +99,7 @@ class ControlAPI:
                 distance_threshold=self.default_distance_threshold,
             )
 
-        self.planner.execute_intent(intent)
+        return self.planner.execute_intent(intent)
 
     def _handle_turn(self, left: bool, cmd: JsonCommand) -> None:
         speed = float(cmd.get("speed", 0.5))
