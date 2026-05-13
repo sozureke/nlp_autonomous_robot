@@ -28,6 +28,7 @@ class DirectExecutor:
             for cmd in plan:
                 action = cmd.get("action")
                 speed = max(0.0, min(1.0, float(cmd.get("speed", 0.5))))
+                duration = cmd.get("duration")
 
                 state = self.robot.get_state()
                 self.world.update(state)
@@ -38,19 +39,19 @@ class DirectExecutor:
                         self.robot.stop()
                     else:
                         self.robot.move(linear=speed, angular=0.0)
-                        time.sleep(self.move_forward_duration)
+                        time.sleep(float(duration) if duration is not None else self.move_forward_duration)
                         self.robot.stop()
                 elif action == "turn_left":
                     self.robot.move(linear=0.0, angular=speed)
-                    time.sleep(self.turn_duration)
+                    time.sleep(float(duration) if duration is not None else self.turn_duration)
                     self.robot.stop()
                 elif action == "turn_right":
                     self.robot.move(linear=0.0, angular=-speed)
-                    time.sleep(self.turn_duration)
+                    time.sleep(float(duration) if duration is not None else self.turn_duration)
                     self.robot.stop()
                 elif action == "scan_360":
                     self.robot.move(linear=0.0, angular=speed)
-                    time.sleep(self.scan_360_duration)
+                    time.sleep(float(duration) if duration is not None else self.scan_360_duration)
                     self.robot.stop()
                 else:
                     self.robot.stop()

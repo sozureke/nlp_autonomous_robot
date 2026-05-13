@@ -9,7 +9,7 @@ from src.core.executor import RobotExecutor
 from src.core.planner import Planner
 from src.core.safety_controller import SafetyController
 from src.core.world_model import WorldModel
-from src.memory.memory import ShortTermMemory
+from src.memory.memory import MetricsCollector, ShortTermMemory
 from src.nlp.intent_parser import IntentParser
 from src.nlp.llm_agent import LLMIntentTranslator, build_default_translator
 from src.real.real_robot import RealRobot
@@ -29,6 +29,7 @@ class RobotRuntime:
     executor: RobotExecutor
     direct_executor: DirectExecutor
     parser: IntentParser
+    metrics: MetricsCollector
 
 
 def build_runtime() -> RobotRuntime:
@@ -51,6 +52,7 @@ def build_runtime() -> RobotRuntime:
     )
     direct_executor = DirectExecutor(robot=robot, world=world)
     parser = IntentParser()
+    metrics = MetricsCollector()
     return RobotRuntime(
         robot=robot,
         world=world,
@@ -62,6 +64,7 @@ def build_runtime() -> RobotRuntime:
         executor=executor,
         direct_executor=direct_executor,
         parser=parser,
+        metrics=metrics,
     )
 
 
@@ -103,6 +106,7 @@ def _build_runtime_from_robot(robot: BaseRobot) -> RobotRuntime:
     )
     direct_executor = DirectExecutor(robot=robot, world=world)
     parser = IntentParser()
+    metrics = MetricsCollector()
     return RobotRuntime(
         robot=robot,
         world=world,
@@ -114,4 +118,5 @@ def _build_runtime_from_robot(robot: BaseRobot) -> RobotRuntime:
         executor=executor,
         direct_executor=direct_executor,
         parser=parser,
+        metrics=metrics,
     )

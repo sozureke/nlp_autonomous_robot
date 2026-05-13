@@ -1,7 +1,5 @@
 from __future__ import annotations
-
 from typing import Any, Dict, Optional
-
 from src.core.robot_api import RobotState
 
 

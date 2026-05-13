@@ -1,0 +1,33 @@
+{
+  "total_commands": 1,
+  "summary": {
+    "completed": 1,
+    "completion_rate": 1.0,
+    "avg_time_sec": 7.827,
+    "total_safety_violations": 0,
+    "total_obstacle_interruptions": 0
+  },
+  "by_mode": {
+    "llm": {
+      "total": 1,
+      "completed": 1,
+      "safety_violations": 0,
+      "obstacle_interruptions": 0,
+      "total_time_sec": 7.827,
+      "completion_rate": 1.0,
+      "avg_time_sec": 7.827
+    }
+  },
+  "commands": [
+    {
+      "command": "go forward slowly for 10 seconds",
+      "mode": "llm",
+      "elapsed_sec": 7.827,
+      "completed": true,
+      "safety_violations": 0,
+      "obstacle_interruptions": 0,
+      "steps_executed": 1,
+      "steps_total": 1
+    }
+  ]
+}

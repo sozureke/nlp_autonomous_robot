@@ -32,6 +32,7 @@ class IntentType(Enum):
     STOP_AT_DISTANCE = "stop_at_distance"
     CONDITIONAL_TURN = "conditional_turn"
     MOVE_UNTIL_OBSTACLE = "move_until_obstacle"
+    MOVE_FOR_DURATION = "move_for_duration"
 
 
 @dataclass
@@ -42,6 +43,7 @@ class Intent:
     # distance-based
     target_distance: Optional[float] = None
     distance_threshold: float = 0.3
+    duration: Optional[float] = None
 
     # conditional turn
     condition: Optional[Condition] = None
@@ -59,6 +61,12 @@ class Intent:
                 raise ValueError("STOP_AT_DISTANCE requires positive target_distance")
 
         if self.type == IntentType.MOVE_UNTIL_OBSTACLE:
+            if self.distance_threshold <= 0:
+                raise ValueError("distance_threshold must be positive")
+
+        if self.type == IntentType.MOVE_FOR_DURATION:
+            if self.duration is None or self.duration <= 0:
+                raise ValueError("MOVE_FOR_DURATION requires positive duration")
             if self.distance_threshold <= 0:
                 raise ValueError("distance_threshold must be positive")
 
@@ -93,6 +101,7 @@ class Planner:
                 IntentType.STOP_AT_DISTANCE: self._handle_stop_at_distance,
                 IntentType.CONDITIONAL_TURN: self._handle_conditional_turn,
                 IntentType.MOVE_UNTIL_OBSTACLE: self._handle_move_until_obstacle,
+                IntentType.MOVE_FOR_DURATION: self._handle_move_for_duration,
             }.get(intent.type)
 
             if handler is None:
@@ -161,6 +170,28 @@ class Planner:
             speed=intent.speed,
             stop_condition=should_stop,
             timeout=self._default_timeout,
+        )
+        if stop_reason == "condition_met":
+            return PlannerExecutionResult(
+                status="interrupted",
+                interruption=PlannerInterruptionSignal(
+                    reason="obstacle_detected",
+                    distance_m=distance,
+                ),
+            )
+        return PlannerExecutionResult(status="completed")
+
+    def _handle_move_for_duration(self, intent: Intent) -> PlannerExecutionResult:
+        def should_stop() -> bool:
+            return (
+                self._world_model.get_distance_to_obstacle()
+                <= intent.distance_threshold
+            )
+
+        stop_reason, distance = self._move_forward_until(
+            speed=intent.speed,
+            stop_condition=should_stop,
+            timeout=float(intent.duration) if intent.duration is not None else self._default_timeout,
         )
         if stop_reason == "condition_met":
             return PlannerExecutionResult(

@@ -3,6 +3,7 @@ from typing import List
 
 from src.core.planner import IntentType
 from .lexicon import (
+    DIRECTION_WORDS,
     MOVEMENT_VERBS,
     OBSTACLE_WORDS,
     UNTIL_WORDS,
@@ -28,6 +29,30 @@ class ConditionalTurnRule(IntentRule):
         has_turn = any(t.lemma_ in {"turn", "rotate"} for t in doc)
         has_blocked = any(w in lemmas for w in OBSTACLE_WORDS)
         return has_if and has_turn and has_blocked
+
+    def intent_type(self) -> IntentType:
+        return IntentType.CONDITIONAL_TURN
+
+
+class WhenObstacleThenTurnRule(IntentRule):
+    """
+    e.g. 'go forward when you see an object, turn left' (no 'if' — ConditionalTurnRule misses this).
+    """
+
+    def matches(self, doc) -> bool:
+        lemmas = {t.lemma_ for t in doc}
+        tokens = {t.text.lower() for t in doc}
+        has_if = "if" in tokens
+        has_when = "when" in lemmas
+        has_until = any(w in tokens for w in UNTIL_WORDS)
+        has_link = has_if or has_when or has_until
+        has_turn = any(t.lemma_ in {"turn", "rotate"} for t in doc)
+        has_obstacle = any(w in lemmas for w in OBSTACLE_WORDS)
+        has_dir = any(w in lemmas for w in DIRECTION_WORDS)
+        has_movement = any(
+            t.lemma_ in MOVEMENT_VERBS and t.pos_ == "VERB" for t in doc
+        ) or "forward" in lemmas
+        return has_link and has_turn and has_obstacle and has_dir and has_movement
 
     def intent_type(self) -> IntentType:
         return IntentType.CONDITIONAL_TURN
@@ -65,6 +90,7 @@ class MoveUntilObstacleRule(IntentRule):
 
 RULES: List[IntentRule] = [
     ConditionalTurnRule(),
+    WhenObstacleThenTurnRule(),
     StopAtDistanceRule(),
     MoveUntilObstacleRule(),
 ]

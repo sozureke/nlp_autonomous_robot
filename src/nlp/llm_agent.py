@@ -56,6 +56,12 @@ class ExternalIntentModel(BaseModel):
         default=None,
         description="Optional stop condition such as 'obstacle_detected'.",
     )
+    duration: float | None = Field(
+        default=None,
+        gt=0.0,
+        le=30.0,
+        description="Optional action duration in seconds.",
+    )
 
     def to_command_dict(self) -> Dict[str, Any]:
         """
@@ -82,6 +88,10 @@ def _step_to_command_dict(step: Dict[str, Any]) -> Dict[str, Any]:
         out["speed"] = float(step["speed"])
     if "until" in step:
         out["until"] = step["until"]
+    if "duration" in step:
+        out["duration"] = float(step["duration"])
+    if "repeat" in step:
+        out["repeat"] = int(step["repeat"])
     return out
 
 
@@ -154,6 +164,11 @@ class LLMIntentTranslator:
                         "type": "string",
                         "enum": ["obstacle_detected"],
                     },
+                    "duration": {
+                        "type": "number",
+                        "exclusiveMinimum": 0.0,
+                        "maximum": 30.0,
+                    },
                 },
                 "required": ["action"],
                 "additionalProperties": False,
@@ -171,6 +186,7 @@ class LLMIntentTranslator:
             "- If the command is ambiguous, pick the safest reasonable interpretation.\n"
             "- If you cannot infer a suitable speed, omit the 'speed' field.\n"
             "- If there is no explicit semantic stop condition, omit the 'until' field.\n\n"
+            "- If command contains explicit duration (e.g., 'for 2 seconds'), set 'duration'.\n\n"
             "JSON Schema for the response:\n"
             f"{schema_description}\n"
         )
@@ -213,6 +229,26 @@ class LLMIntentTranslator:
                     "type": "string",
                     "enum": ["obstacle_detected"],
                 },
+                "duration": {
+                    "type": "number",
+                    "exclusiveMinimum": 0.0,
+                    "maximum": 30.0,
+                },
+                "repeat": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                },
+                "duration": {
+                    "type": "number",
+                    "exclusiveMinimum": 0.0,
+                    "maximum": 30.0,
+                },
+                "repeat": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                },
             },
             "required": ["action"],
             "additionalProperties": False,
@@ -228,6 +264,11 @@ class LLMIntentTranslator:
                         "type": "array",
                         "items": step_schema,
                         "minItems": 1,
+                    },
+                    "repeat": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
                     },
                 },
                 "additionalProperties": False,
@@ -245,15 +286,17 @@ class LLMIntentTranslator:
             "Convert the user's command into a STRICT JSON object.\n\n"
             f"{context_note}"
             "For a SINGLE task, respond with one action:\n"
-            '  {"action": "move_forward", "speed": 0.5, "until": "obstacle_detected"}\n\n'
+            '  {"action": "move_forward", "speed": 0.5, "duration": 2.0, "until": "obstacle_detected"}\n\n'
             "For MULTIPLE tasks in one command, respond with a plan:\n"
-            '  {"plan": [{"action": "turn_left", "speed": 0.5}, {"action": "move_forward", "speed": 0.3, "until": "obstacle_detected"}]}\n\n'
+            '  {"plan": [{"action": "turn_left", "speed": 0.5}, {"action": "move_forward", "speed": 0.3, "duration": 1.5, "until": "obstacle_detected"}]}\n\n'
+            "For repetition, use step repeat or top-level repeat:\n"
+            '  {"plan": [{"action":"turn_left","repeat":2},{"action":"move_forward","duration":1.0}],"repeat":3}\n\n'
             "Rules:\n"
             "- Respond with JSON ONLY. No explanations, no markdown, no code fences.\n"
             "- Turn 180 degrees = two turn_left steps (or two turn_right).\n"
             "- If only one step is needed, use the single 'action' form.\n"
             "- If multiple steps are needed, use the 'plan' array.\n"
-            "- Omit 'speed' or 'until' when not needed.\n\n"
+            "- Omit 'speed', 'duration', or 'until' when not needed.\n\n"
             "JSON shape (use either single action OR plan, not both):\n"
             f"{schema_description}\n"
         )
@@ -298,19 +341,73 @@ class LLMIntentTranslator:
                 if not isinstance(step, dict):
                     continue
                 try:
-                    out.append(_step_to_command_dict(step))
+                    out.extend(self._expand_step_repeat(_step_to_command_dict(step)))
                 except (ValueError, TypeError):
                     continue
             if out:
-                return out
+                return self.expand_plan_repeat(out, data.get("repeat"))
 
         if "action" in data:
             try:
-                return [_step_to_command_dict(data)]
+                out = self._expand_step_repeat(_step_to_command_dict(data))
+                return self.expand_plan_repeat(out, data.get("repeat"))
             except (ValueError, TypeError):
                 pass
 
         return self._rule_based_fallback_plan(command)
+
+    def parse_plan_json_content(self, raw: str) -> List[Dict[str, Any]]:
+        """
+        Parse a model response into executable plan steps.
+        """
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = self._extract_json_from_text(raw)
+        if not data:
+            return []
+
+        if "plan" in data and isinstance(data["plan"], list):
+            out: List[Dict[str, Any]] = []
+            for step in data["plan"]:
+                if not isinstance(step, dict):
+                    continue
+                try:
+                    out.extend(self._expand_step_repeat(_step_to_command_dict(step)))
+                except (ValueError, TypeError):
+                    continue
+            return self.expand_plan_repeat(out, data.get("repeat"))
+        if "action" in data:
+            try:
+                out = self._expand_step_repeat(_step_to_command_dict(data))
+                return self.expand_plan_repeat(out, data.get("repeat"))
+            except (ValueError, TypeError):
+                return []
+        return []
+
+    def _expand_step_repeat(self, step: Dict[str, Any]) -> List[Dict[str, Any]]:
+        repeat = int(step.get("repeat", 1))
+        if repeat < 1:
+            repeat = 1
+        repeat = min(repeat, 20)
+        base = dict(step)
+        base.pop("repeat", None)
+        return [dict(base) for _ in range(repeat)]
+
+    def expand_plan_repeat(self, plan: List[Dict[str, Any]], repeat_value: Any) -> List[Dict[str, Any]]:
+        if repeat_value is None:
+            return plan
+        try:
+            repeat = int(repeat_value)
+        except (TypeError, ValueError):
+            return plan
+        if repeat <= 1:
+            return plan
+        repeat = min(repeat, 20)
+        out: List[Dict[str, Any]] = []
+        for _ in range(repeat):
+            out.extend(dict(step) for step in plan)
+        return out
 
     def build_replan_messages(
         self,
@@ -432,12 +529,12 @@ class LLMIntentTranslator:
             if not isinstance(step, dict):
                 continue
             try:
-                out.append(_step_to_command_dict(step))
+                out.extend(self._expand_step_repeat(_step_to_command_dict(step)))
             except (ValueError, TypeError):
                 continue
 
         if out:
-            return out
+            return self.expand_plan_repeat(out, data.get("repeat"))
         return [{"action": "scan_360", "speed": 0.4}, {"action": "turn_left", "speed": 0.5}]
 
     def _extract_json_from_text(self, text: str) -> Optional[Dict[str, Any]]:
@@ -509,17 +606,18 @@ class LLMIntentTranslator:
         Conservative heuristic mapping when LLM output cannot be trusted.
         """
         text = command.lower()
+        duration = self._extract_duration_seconds(text)
 
         # turning
         if any(phrase in text for phrase in ["turn left", "rotate left", "spin left", "left turn"]):
-            return ExternalIntentModel(action=Action.TURN_LEFT, speed=0.5)
+            return ExternalIntentModel(action=Action.TURN_LEFT, speed=0.5, duration=duration)
 
         if any(phrase in text for phrase in ["turn right", "rotate right", "spin right", "right turn"]):
-            return ExternalIntentModel(action=Action.TURN_RIGHT, speed=0.5)
+            return ExternalIntentModel(action=Action.TURN_RIGHT, speed=0.5, duration=duration)
 
         # 360 / scan
         if any(phrase in text for phrase in ["scan", "look around", "360", "full turn"]):
-            return ExternalIntentModel(action=Action.SCAN_360, speed=0.5)
+            return ExternalIntentModel(action=Action.SCAN_360, speed=0.5, duration=duration)
 
         # forward / move
         if any(w in text for w in ["forward", "ahead", "go", "move"]):
@@ -531,6 +629,7 @@ class LLMIntentTranslator:
                 action=Action.MOVE_FORWARD,
                 speed=0.5,
                 until=until,
+                duration=duration,
             )
 
         # stop / halt
@@ -545,13 +644,19 @@ class LLMIntentTranslator:
         Heuristic multi-step fallback when LLM is unavailable.
         """
         text = command.lower().strip()
+        duration = self._extract_duration_seconds(text)
 
         if any(phrase in text for phrase in ["turn 180", "turn around", "180 degrees"]):
             if any(w in text for w in ["forward", "ahead", "go", "move"]):
                 return [
                     {"action": "turn_left", "speed": 0.5},
                     {"action": "turn_left", "speed": 0.5},
-                    {"action": "move_forward", "speed": 0.5, "until": "obstacle_detected"},
+                    {
+                        "action": "move_forward",
+                        "speed": 0.5,
+                        "until": "obstacle_detected",
+                        **({"duration": duration} if duration is not None else {}),
+                    },
                 ]
             return [
                 {"action": "turn_left", "speed": 0.5},
@@ -559,6 +664,23 @@ class LLMIntentTranslator:
             ]
 
         return [self._rule_based_fallback(command).to_command_dict()]
+
+    def _extract_duration_seconds(self, text: str) -> Optional[float]:
+        patterns = [
+            r"for\s+(\d+(?:\.\d+)?)\s*(?:sec|secs|second|seconds|s)\b",
+            r"(\d+(?:\.\d+)?)\s*(?:sec|secs|second|seconds|s)\b",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, text)
+            if not m:
+                continue
+            try:
+                value = float(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return min(value, 30.0)
+        return None
 
 
 def build_default_translator() -> LLMIntentTranslator:

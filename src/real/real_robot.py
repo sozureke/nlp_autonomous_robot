@@ -1,9 +1,7 @@
 import os
 import serial
 import time
-
 from dotenv import load_dotenv
-
 from ..core.robot_api import BaseRobot, RobotState
 
 
@@ -59,9 +57,6 @@ class RealRobot(BaseRobot):
             ) from e
         time.sleep(2)  # wait for Arduino reset
 
-        # Motor calibration compensates open-loop drift.
-        # Example: if the robot drifts left, the right motor is likely stronger,
-        # so reduce MOTOR_RIGHT_TRIM below 1.0.
         self._left_trim = (
             left_trim if left_trim is not None else self._read_float_env("MOTOR_LEFT_TRIM", 1.0)
         )
@@ -103,8 +98,6 @@ class RealRobot(BaseRobot):
 
         calibrated = int(power * trim)
 
-        # Offset is applied with the current motor direction so it behaves
-        # consistently in both forward and backward motion.
         if offset:
             calibrated += (1 if power > 0 else -1) * offset
 
@@ -157,7 +150,6 @@ class RealRobot(BaseRobot):
             raise RobotConnectionError(_connection_lost_msg(e)) from e
 
     def get_state(self) -> RobotState:
-        # read all available lines, keep last valid state
         try:
             while self._ser.in_waiting:
                 line = self._readline()

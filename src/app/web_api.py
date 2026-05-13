@@ -12,10 +12,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from src.app.runtime import RobotRuntime, build_runtime_with_mode
+from src.nlp.plan_resolution import resolve_command_plan
 
 
 class CommandRequest(BaseModel):
     command: str = Field(min_length=1)
+    mode: str = Field(default="llm", description="llm | rules | direct")
 
 
 class ConnectRequest(BaseModel):
@@ -85,7 +87,7 @@ class WebRuntimeState:
         thread = self._command_thread
         return thread is not None and thread.is_alive()
 
-    def launch_command(self, command: str) -> Dict[str, Any]:
+    def launch_command(self, command: str, mode: str = "llm") -> Dict[str, Any]:
         if self.runtime is None:
             raise HTTPException(status_code=409, detail="Robot is not connected. Connect first.")
 
@@ -95,25 +97,35 @@ class WebRuntimeState:
 
             thread = threading.Thread(
                 target=self._execute_command,
-                args=(command,),
+                args=(command, mode),
                 daemon=True,
             )
             self._command_thread = thread
             thread.start()
-            return {"accepted": True, "mode": "task"}
+            return {"accepted": True, "mode": mode}
 
-    def _execute_command(self, command: str) -> None:
+    def _execute_command(self, command: str, command_mode: str) -> None:
         if self.runtime is None:
             return
 
         try:
+            mode_norm = (command_mode or "llm").strip().lower()
+            self.runtime.metrics.record_command(
+                command=command,
+                mode=mode_norm,
+                source="web_ui",
+            )
             world_state = self.runtime.world.to_dict()
             memory_state = self.runtime.memory.to_dict()
-            plan = self.runtime.translator.infer_plan(
-                command,
+            resolved = resolve_command_plan(
+                translator=self.runtime.translator,
+                parser=self.runtime.parser,
+                command=command,
                 world_state=world_state,
                 memory=memory_state,
+                command_mode=mode_norm,
             )
+            plan = resolved.steps
             self.last_plan = plan
             self.last_plan_command = command
             if not plan:
@@ -121,15 +133,26 @@ class WebRuntimeState:
                     "ui_no_plan",
                     payload={"command": command},
                 )
+                self.runtime.metrics.record_result(status="failed", error="no_plan")
                 return
 
             self.runtime.world.set_internal_state(moving=True, last_action="plan")
             self.runtime.memory.add_action_event(
                 "llm_plan",
-                payload={"source": "web_ui", "command": command, "steps": plan},
+                payload={"source": "web_ui", "command": command, "steps": plan, "mode": mode_norm},
             )
 
-            self.runtime.executor.execute_task(raw_command=command, plan=plan)
+            if mode_norm == "direct":
+                direct_result = self.runtime.direct_executor.execute_plan(plan)
+                status = "completed" if direct_result.get("success") else "failed"
+                self.runtime.metrics.record_result(
+                    status=status,
+                    safety_violations=int(direct_result.get("safety_violations", 0)),
+                )
+            else:
+                self.runtime.executor.execute_task(raw_command=command, plan=plan)
+                final_status = "interrupted" if self.runtime.executor.runtime_status == "interrupted" else "completed"
+                self.runtime.metrics.record_result(status=final_status)
         except Exception as exc:
             self.last_error = str(exc)
             if self.runtime is not None:
@@ -137,6 +160,7 @@ class WebRuntimeState:
                     "ui_execution_error",
                     payload={"command": command, "error": str(exc)},
                 )
+                self.runtime.metrics.record_result(status="failed", error=str(exc))
         finally:
             if self.runtime is not None:
                 self.runtime.world.set_internal_state(moving=False)
@@ -230,12 +254,23 @@ def plan_command(req: CommandRequest) -> Dict[str, Any]:
 
     world_state = state.runtime.world.to_dict()
     memory_state = state.runtime.memory.to_dict()
-    plan = state.runtime.translator.infer_plan(command, world_state=world_state, memory=memory_state)
+    resolved = resolve_command_plan(
+        translator=state.runtime.translator,
+        parser=state.runtime.parser,
+        command=command,
+        world_state=world_state,
+        memory=memory_state,
+        command_mode=req.mode,
+    )
+    plan = resolved.steps
     state.last_plan = plan
     state.last_plan_command = command
     return {
         "command": command,
         "plan": plan,
+        "mode": req.mode,
+        "source": resolved.source,
+        "message": resolved.message,
         "manual_assist_mode": False,
     }
 
@@ -245,7 +280,7 @@ def execute_command(req: CommandRequest) -> Dict[str, Any]:
     command = req.command.strip()
     if not command:
         raise HTTPException(status_code=400, detail="Empty command")
-    return state.launch_command(command)
+    return state.launch_command(command, mode=req.mode)
 
 
 @app.post("/api/connect")
@@ -269,6 +304,20 @@ def events(
     items = state.runtime.memory.events_since(offset=offset, limit=limit)
     next_offset = offset + len(items)
     return {"offset": offset, "next_offset": next_offset, "events": items}
+
+
+@app.get("/api/metrics")
+def api_metrics() -> Dict[str, Any]:
+    if state.runtime is None:
+        return {"connected": False, "metrics": None}
+    return {"connected": True, "metrics": state.runtime.metrics.snapshot()}
+
+
+@app.post("/api/metrics/reset")
+def api_metrics_reset() -> Dict[str, Any]:
+    if state.runtime is None:
+        return {"connected": False, "metrics": None}
+    return {"connected": True, "metrics": state.runtime.metrics.reset()}
 
 
 def main() -> None:

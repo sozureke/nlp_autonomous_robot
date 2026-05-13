@@ -1,0 +1,43 @@
+{
+  "total_commands": 2,
+  "summary": {
+    "completed": 2,
+    "completion_rate": 1.0,
+    "avg_time_sec": 0.001,
+    "total_safety_violations": 0,
+    "total_obstacle_interruptions": 0
+  },
+  "by_mode": {
+    "direct": {
+      "total": 2,
+      "completed": 2,
+      "safety_violations": 0,
+      "obstacle_interruptions": 0,
+      "total_time_sec": 0.002,
+      "completion_rate": 1.0,
+      "avg_time_sec": 0.001
+    }
+  },
+  "commands": [
+    {
+      "command": "Что значит direct no safety?",
+      "mode": "direct",
+      "elapsed_sec": 0.001,
+      "completed": true,
+      "safety_violations": 0,
+      "obstacle_interruptions": 0,
+      "steps_executed": 1,
+      "steps_total": 1
+    },
+    {
+      "command": "Что значит direct no safety?",
+      "mode": "direct",
+      "elapsed_sec": 0.001,
+      "completed": true,
+      "safety_violations": 0,
+      "obstacle_interruptions": 0,
+      "steps_executed": 1,
+      "steps_total": 1
+    }
+  ]
+}

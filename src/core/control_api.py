@@ -17,7 +17,7 @@ class JsonCommand(TypedDict, total=False):
 
     action: Literal["move_forward", "stop", "turn_left", "turn_right", "scan_360"]
     speed: float
-    # optional semantic modifiers, will expand later
+    duration: float
     until: Optional[Literal["obstacle_detected"]]
 
 
@@ -42,13 +42,11 @@ class ControlAPI:
         Lazy-initialized high-level action layer bound to the same robot/world
         as the underlying planner.
         """
-        # We deliberately reach into planner internals here to avoid changing
-        # its public API while still keeping a single source of truth for the
-        # robot and world model.
+        
         if not hasattr(self, "__actions"):
             self.__actions = RobotActions(
-                robot=self.planner._robot,  # type: ignore[attr-defined]
-                world=self.planner._world_model,  # type: ignore[attr-defined]
+                robot=self.planner._robot, 
+                world=self.planner._world_model, 
             )
         return self.__actions
 
@@ -81,10 +79,18 @@ class ControlAPI:
     def _handle_move_forward(self, cmd: JsonCommand) -> PlannerExecutionResult:
         speed = float(cmd.get("speed", 0.5))
         until = cmd.get("until")
+        duration = cmd.get("duration")
 
         # For Priority 0 we only support a single semantic condition:
         # "move_forward until obstacle_detected"
-        if until == "obstacle_detected":
+        if duration is not None:
+            intent = Intent(
+                type=IntentType.MOVE_FOR_DURATION,
+                speed=speed,
+                duration=float(duration),
+                distance_threshold=self.default_distance_threshold,
+            )
+        elif until == "obstacle_detected":
             intent = Intent(
                 type=IntentType.MOVE_UNTIL_OBSTACLE,
                 speed=speed,
@@ -103,7 +109,7 @@ class ControlAPI:
 
     def _handle_turn(self, left: bool, cmd: JsonCommand) -> None:
         speed = float(cmd.get("speed", 0.5))
-        duration = 1.0
+        duration = float(cmd.get("duration", 1.0))
 
         if left:
             self._actions.turn_left(angular_speed=speed, duration=duration)
@@ -112,5 +118,13 @@ class ControlAPI:
 
     def _handle_scan_360(self, cmd: JsonCommand) -> None:
         speed = float(cmd.get("speed", 0.5))
+        duration = cmd.get("duration")
+        if duration is not None and float(duration) > 0:
+            angular = max(0.0, min(1.0, speed))
+            self._actions.robot.move(linear=0.0, angular=angular)
+            import time
+            time.sleep(float(duration))
+            self._actions.robot.stop()
+            return
         self._actions.scan_360(angular_speed=speed)
 
