@@ -48,3 +48,17 @@ python experiment/live_metrics_logger.py --base-url http://localhost:8000
 ```
 
 This writes session artifacts into `experiment/results/live_session_<timestamp>/`.
+
+## 15-Pair Experiment Protocol
+
+- Runlist: `experiment/commands_dynamic_15.csv`
+- Scoring template: `experiment/operator_scores_template.csv`
+- Playbook and rubric: `experiment/dynamic_10_protocol.md`
+
+Post-run analysis:
+
+```bash
+python experiment/analyze_results.py \
+  --input-dir experiment/results/<session_id> \
+  --labels experiment/results/<session_id>/operator_scores.csv
+```
