@@ -1,11 +1,7 @@
 # NLP autonomous robot
 
 ## Demo
-
 ![Robot demo](assets/demo.gif)
-
-Add your clip as **`assets/demo.gif`** (GitHub shows GIFs inline in the README). For a longer HD video you can still link YouTube/Vimeo under this image.
-
 ---
 
 Small mobile robot controlled by natural language: commands become a symbolic plan (LLM or rules), optionally checked by a safety layer, then executed on hardware.
