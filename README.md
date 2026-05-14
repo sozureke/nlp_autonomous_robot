@@ -1,8 +1,8 @@
-# NLP Autonomous Robot
-
 ## Demo
 
-## Robot demo
+![Robot demo](assets/demo.gif)
+
+---
 
 Small mobile robot controlled by natural language: commands become a symbolic plan (LLM or rules), optionally checked by a safety layer, then executed on hardware.
 
