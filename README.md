@@ -1,39 +1,39 @@
-# NLP autonomous robot
+# NLP Autonomous Robot
 
 ## Demo
-![Robot demo](assets/demo.gif)
----
+
+## Robot demo
 
 Small mobile robot controlled by natural language: commands become a symbolic plan (LLM or rules), optionally checked by a safety layer, then executed on hardware.
 
 You can compare two execution modes from the UI or API:
+
 - **LLM** — staged plan executed through the planner / robot executor (typical obstacle handling and logging).
 - **Direct** — alternative execution path intended for benchmarking (different mapping and semantics).
 
 ## What’s in here
 
-| Area | Role |
-|------|------|
-| `src/nlp` | Parsing, LLM (OpenRouter) plan JSON, deterministic fallbacks |
-| `src/core` | Planner, safety, robot control API |
-| `src/app` | FastAPI backend for a separate web UI (`/api`, `/docs`) |
-| `src/real` | Real robot bindings |
-| `src/logging` | Optional session logger that polls `/api/events` |
+
+| Area          | Role                                                                     |
+| ------------- | ------------------------------------------------------------------------ |
+| `src/nlp`     | Parsing, LLM (OpenRouter) plan JSON, deterministic fallbacks             |
+| `src/core`    | Planner, safety, robot control API                                       |
+| `src/app`     | FastAPI backend for a separate web UI (`/api`, `/docs`)                  |
+| `src/real`    | Real robot bindings                                                      |
+| `src/logging` | Optional session logger that polls `/api/events`                         |
+| `web/`        | Next.js frontend (dev server on port 3000; talks to the FastAPI backend) |
+
 
 ## How it works
 
 1. **Natural language in** — Operator text comes from the CLI or the FastAPI routes (e.g. `/api/execute` after `/api/connect`).
-
 2. **Command → plan** — `resolve_command_plan` turns text into a **list of JSON steps** (`move_forward`, `turn_left`, `stop`, `scan_360`, each with optional `duration`, `speed`, `until`, etc.):
-   - **`rules`** — rule-based / spaCy pipeline when that mode is selected.
-   - **`llm` / `direct`** — OpenRouter builds a plan when the request succeeds; for a few fixed English patterns a **deterministic parser** runs first and skips the network; if the model or network fails, a **keyword heuristic** fills in (weaker on long or compound sentences).
-
+  - `**rules`** — rule-based / spaCy pipeline when that mode is selected.
+  - `**llm` / `direct**` — OpenRouter builds a plan when the request succeeds; for a few fixed English patterns a **deterministic parser** runs first and skips the network; if the model or network fails, a **keyword heuristic** fills in (weaker on long or compound sentences).
 3. **Two runtimes** (chosen by `mode` on the request):
-   - **`llm`** — `RobotExecutor` runs the plan step by step: `SafetyController` may rewrite a step using `WorldModel`, then `ControlAPI` maps JSON to `Planner` intents (time-limited move, move until obstacle, turns, scan). If **forward** stops on an **obstacle** and the plan still has **more steps**, execution can **continue** with the next step; if that was the **last** step, the task ends as interrupted.
-   - **`direct`** — `DirectExecutor` runs the **same structured plan** through a **separate** execution path (different mapping and semantics; useful for comparisons — see `direct_executor.py`).
-
+  - `**llm`** — `RobotExecutor` runs the plan step by step: `SafetyController` may rewrite a step using `WorldModel`, then `ControlAPI` maps JSON to `Planner` intents (time-limited move, move until obstacle, turns, scan). If **forward** stops on an **obstacle** and the plan still has **more steps**, execution can **continue** with the next step; if that was the **last** step, the task ends as interrupted.
+  - `**direct`** — `DirectExecutor` runs the **same structured plan** through a **separate** execution path (different mapping and semantics; useful for comparisons — see `direct_executor.py`).
 4. **Robot I/O** — `Planner` talks to `RealRobot` over **USB serial** (port/baud from env). Telemetry updates the world model and feeds safety / obstacle logic.
-
 5. **Events** — Plans and outcomes are recorded for `/api/events` (and optional `src.logging.live_metrics_logger`) so the UI or offline analysis can correlate commands, `plan_source`, and completion.
 
 ## Setup
@@ -47,11 +47,13 @@ The backend loads `.env` from the project directory (via `python-dotenv` where w
 
 ### Environment variables
 
-| Variable | Notes |
-|----------|--------|
-| `OPENROUTER_API_KEY` | Required for NL → plan via OpenRouter (LLM / `direct` plan path when not using deterministic fallbacks). |
-| `ROBOT_SERIAL_PORT` | USB device for the rover (Linux examples: `/dev/ttyUSB0`, `/dev/ttyACM0`). If unset or missing on disk, the code tries common ports, then defaults to `/dev/ttyUSB0`. |
-| `ROBOT_BAUDRATE` | Serial baud rate; default **`115200`** if unset or invalid. |
+
+| Variable             | Notes                                                                                                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENROUTER_API_KEY` | Required for NL → plan via OpenRouter (LLM / `direct` plan path when not using deterministic fallbacks).                                                              |
+| `ROBOT_SERIAL_PORT`  | USB device for the rover (Linux examples: `/dev/ttyUSB0`, `/dev/ttyACM0`). If unset or missing on disk, the code tries common ports, then defaults to `/dev/ttyUSB0`. |
+| `ROBOT_BAUDRATE`     | Serial baud rate; default `**115200**` if unset or invalid.                                                                                                           |
+
 
 **Optional elsewhere in the stack:** `LLM_INTENT_MODEL` (default `openrouter/auto`), `WEB_CORS_ORIGINS` for the FastAPI app (comma-separated origins; see `web_api`). Motor tuning: `MOTOR_LEFT_TRIM`, `MOTOR_RIGHT_TRIM`, `MOTOR_LEFT_OFFSET`, `MOTOR_RIGHT_OFFSET` (`real_robot`).
 
@@ -70,8 +72,44 @@ export PYTHONPATH="$PWD"
 python -m src.app.web_api
 ```
 
-Docs: http://localhost:8000/docs  
+Docs: [http://localhost:8000/docs](http://localhost:8000/docs)  
 Point your frontend at the same origin or set CORS (`WEB_CORS_ORIGINS`) as needed.
+
+## Frontend (`web/`)
+
+The UI is a **Next.js** app. The lockfile and `packageManager` field use **Yarn 1** (Classic).
+
+**Install dependencies** (from repository root):
+
+```bash
+cd web
+yarn install
+```
+
+**Configure the API** — copy [`web/.env.local.example`](web/.env.local.example) and uncomment **one** variable (never both at once):
+
+```bash
+cd web
+cp .env.local.example .env.local
+```
+
+| Variable | Role |
+|----------|------|
+| `ROBOT_API_REWRITE_TARGET` | **Proxy mode:** Next forwards `/api/*` to this URL (e.g. `http://<pi-ip>:8000`). Prefer this for Pi + laptop. |
+| `NEXT_PUBLIC_ROBOT_API_BASE` | **Direct mode:** browser calls this URL; set `WEB_CORS_ORIGINS` on FastAPI for your UI origin. |
+
+**Run in development** (default [http://localhost:3000](http://localhost:3000)):
+
+```bash
+yarn dev
+```
+
+**Production build** (after `yarn install`):
+
+```bash
+yarn build
+yarn start
+```
 
 **Session logging** while the backend is up:
 

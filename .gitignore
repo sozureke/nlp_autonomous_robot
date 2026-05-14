@@ -138,3 +138,20 @@ results/
 *.pyo
 *.pyd
 
+# Frontend — Next.js app in web/ (deps, build output, local env)
+web/node_modules/
+web/.next/
+web/out/
+web/.vercel/
+web/.turbo/
+web/coverage/
+web/*.tsbuildinfo
+web/.env
+web/.env.local
+web/.env.*.local
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+web/.pnpm-debug.log*
+web/.git/
+
