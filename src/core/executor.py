@@ -132,12 +132,15 @@ class RobotExecutor:
             intended_move = cmd.get("action") == "move_forward"
             safety_blocked = intended_move and safe_cmd.get("action") == "stop"
             if safety_blocked:
-                self._handle_obstacle_stop(
+                if not self._handle_forward_obstacle(
                     source="safety_controller",
                     step_index=idx,
                     distance_cm=self._current_distance_cm(),
-                )
-                return
+                    intended_cmd=cmd,
+                ):
+                    return
+                continue
+
             result = self.execute_json_command(safe_cmd)  # type: ignore[arg-type]
 
             interrupted = (
@@ -147,12 +150,14 @@ class RobotExecutor:
                 and safe_cmd.get("action") == "move_forward"
             )
             if interrupted:
-                self._handle_obstacle_stop(
+                if not self._handle_forward_obstacle(
                     source="planner",
                     step_index=idx,
                     distance_cm=result.interruption.distance_m * 100.0,
-                )
-                return
+                    intended_cmd=cmd,
+                ):
+                    return
+                continue
 
             self._log_step_done(idx, len(self.active_task.original_plan), safe_cmd)
             self.active_task.current_step_index += 1
@@ -166,31 +171,81 @@ class RobotExecutor:
         )
         self.active_task = None
 
-    def _handle_obstacle_stop(self, *, source: str, step_index: int, distance_cm: float) -> None:
+    def _has_further_plan_steps(self, step_index: int) -> bool:
         if self.active_task is None:
-            return
-        self.active_task.status = "interrupted"
-        self.active_task.last_interruption = {
+            return False
+        return step_index + 1 < len(self.active_task.original_plan)
+
+    def _handle_forward_obstacle(
+        self,
+        *,
+        source: str,
+        step_index: int,
+        distance_cm: float,
+        intended_cmd: Dict[str, Any],
+    ) -> bool:
+        """
+        React to obstacle during a forward segment.
+
+        Returns True if the caller should continue with the next plan step,
+        False if the task ends here (no remaining steps).
+        """
+        if self.active_task is None:
+            return False
+
+        self.execute_json_command({"action": "stop"})
+
+        continues = self._has_further_plan_steps(step_index)
+        n_total = len(self.active_task.original_plan)
+        interruption = {
             "reason": "obstacle_detected",
             "distance_cm": distance_cm,
             "source": source,
             "step_index": step_index,
+            "continues_plan": continues,
         }
+        self.active_task.last_interruption = interruption
         self.last_interruption_event = {
             "task": self.active_task.raw_command,
             "task_id": self.active_task.task_id,
-            "reason": "obstacle_detected",
-            "distance_cm": distance_cm,
-            "source": source,
-            "step_index": step_index,
+            **interruption,
         }
+
+        self._record_memory(
+            "step_done",
+            payload={
+                "step_index": step_index,
+                "step_total": n_total,
+                "command": intended_cmd,
+                "outcome": "obstacle_blocked",
+                "distance_cm": distance_cm,
+                "source": source,
+                "continues_plan": continues,
+            },
+        )
+
+        if continues:
+            self.runtime_status = "executing"
+            remaining = n_total - step_index - 1
+            print(
+                f"[task] obstacle at step {step_index + 1}/{n_total} ({distance_cm:.1f} cm, {source}); "
+                f"continuing plan ({remaining} step(s) left)."
+            )
+            self._record_memory(
+                "obstacle_blocked_forward_step",
+                payload=dict(self.last_interruption_event),
+            )
+            self.active_task.current_step_index = step_index + 1
+            return True
+
+        self.active_task.status = "interrupted"
         self.runtime_status = "interrupted"
-        self.execute_json_command({"action": "stop"})
         print(
-            f"[task] stopped: obstacle detected at {distance_cm:.1f} cm. "
-            "Further movement is not possible until operator sends a new command."
+            f"[task] stopped: obstacle at {distance_cm:.1f} cm (final step). "
+            "No further steps in current plan."
         )
         self._record_memory("task_stopped_obstacle", self.last_interruption_event)
+        return False
 
     def _apply_safety(self, cmd: Dict[str, Any]) -> Dict[str, Any]:
         safe_cmd = dict(cmd)

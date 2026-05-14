@@ -98,6 +98,14 @@ def resolve_command_plan(
             )
         return _heuristic(translator, command, None, re)
 
+    phrase_plan = translator._parse_forward_then_turn_repeat_plan(command)
+    if phrase_plan:
+        return CommandPlanResult(
+            steps=phrase_plan,
+            source="heuristic",
+            message="Plan from phrase pattern (forward, then turn, repeated); LLM skipped for this shape.",
+        )
+
     # llm, direct: OpenRouter first
     try:
         messages = translator.build_plan_messages(command, world_state, memory)

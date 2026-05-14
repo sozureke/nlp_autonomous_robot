@@ -1,3 +1,45 @@
+# NLP autonomous robot
+
+## Demo
+
+![Robot demo](assets/demo.gif)
+
+Add your clip as **`assets/demo.gif`** (GitHub shows GIFs inline in the README). For a longer HD video you can still link YouTube/Vimeo under this image.
+
+---
+
+Small mobile robot controlled by natural language: commands become a symbolic plan (LLM or rules), optionally checked by a safety layer, then executed on hardware.
+
+You can compare two execution modes from the UI or API:
+- **LLM** — staged plan executed through the planner / robot executor (typical obstacle handling and logging).
+- **Direct** — alternative execution path intended for benchmarking (different mapping and semantics).
+
+## What’s in here
+
+| Area | Role |
+|------|------|
+| `src/nlp` | Parsing, LLM (OpenRouter) plan JSON, deterministic fallbacks |
+| `src/core` | Planner, safety, robot control API |
+| `src/app` | FastAPI backend for a separate web UI (`/api`, `/docs`) |
+| `src/real` | Real robot bindings |
+| `src/logging` | Optional session logger that polls `/api/events` |
+
+## How it works
+
+1. **Natural language in** — Operator text comes from the CLI or the FastAPI routes (e.g. `/api/execute` after `/api/connect`).
+
+2. **Command → plan** — `resolve_command_plan` turns text into a **list of JSON steps** (`move_forward`, `turn_left`, `stop`, `scan_360`, each with optional `duration`, `speed`, `until`, etc.):
+   - **`rules`** — rule-based / spaCy pipeline when that mode is selected.
+   - **`llm` / `direct`** — OpenRouter builds a plan when the request succeeds; for a few fixed English patterns a **deterministic parser** runs first and skips the network; if the model or network fails, a **keyword heuristic** fills in (weaker on long or compound sentences).
+
+3. **Two runtimes** (chosen by `mode` on the request):
+   - **`llm`** — `RobotExecutor` runs the plan step by step: `SafetyController` may rewrite a step using `WorldModel`, then `ControlAPI` maps JSON to `Planner` intents (time-limited move, move until obstacle, turns, scan). If **forward** stops on an **obstacle** and the plan still has **more steps**, execution can **continue** with the next step; if that was the **last** step, the task ends as interrupted.
+   - **`direct`** — `DirectExecutor` runs the **same structured plan** through a **separate** execution path (different mapping and semantics; useful for comparisons — see `direct_executor.py`).
+
+4. **Robot I/O** — `Planner` talks to `RealRobot` over **USB serial** (port/baud from env). Telemetry updates the world model and feeds safety / obstacle logic.
+
+5. **Events** — Plans and outcomes are recorded for `/api/events` (and optional `src.logging.live_metrics_logger`) so the UI or offline analysis can correlate commands, `plan_source`, and completion.
+
 ## Setup
 
 ```bash
@@ -5,60 +47,41 @@ python -m pip install -r requirements.txt
 python -m spacy download en_core_web_sm
 ```
 
-## Run CLI
+The backend loads `.env` from the project directory (via `python-dotenv` where wired). You can export the same names in your shell instead.
+
+### Environment variables
+
+| Variable | Notes |
+|----------|--------|
+| `OPENROUTER_API_KEY` | Required for NL → plan via OpenRouter (LLM / `direct` plan path when not using deterministic fallbacks). |
+| `ROBOT_SERIAL_PORT` | USB device for the rover (Linux examples: `/dev/ttyUSB0`, `/dev/ttyACM0`). If unset or missing on disk, the code tries common ports, then defaults to `/dev/ttyUSB0`. |
+| `ROBOT_BAUDRATE` | Serial baud rate; default **`115200`** if unset or invalid. |
+
+**Optional elsewhere in the stack:** `LLM_INTENT_MODEL` (default `openrouter/auto`), `WEB_CORS_ORIGINS` for the FastAPI app (comma-separated origins; see `web_api`). Motor tuning: `MOTOR_LEFT_TRIM`, `MOTOR_RIGHT_TRIM`, `MOTOR_LEFT_OFFSET`, `MOTOR_RIGHT_OFFSET` (`real_robot`).
+
+## Run
+
+**CLI:**
 
 ```bash
 python -m src.app.main
 ```
 
-## Run Web UI (FastAPI)
+**Web backend** (run from repo root):
 
 ```bash
 export PYTHONPATH="$PWD"
-export WEB_CORS_ORIGINS="http://localhost:3000,http://127.0.0.1:3000"
 python -m src.app.web_api
 ```
 
-Remote clients: set `WEB_CORS_ORIGINS` to include your PC’s Next.js origin, e.g. `http://192.168.1.50:3000`.
+Docs: http://localhost:8000/docs  
+Point your frontend at the same origin or set CORS (`WEB_CORS_ORIGINS`) as needed.
 
-Open: [http://localhost:8000](http://localhost:8000) (or `http://<pi-ip>:8000` from LAN)
-
-API notes:
-- `POST /api/plan` and `POST /api/execute` accept `{ "command": "...", "mode": "llm|rules|direct" }`.
-- Plan steps can contain optional `duration` (seconds) and `repeat` fields.
-- Metrics endpoints: `GET /api/metrics`, `POST /api/metrics/reset`.
-
-## Run Next.js Web App
+**Session logging** while the backend is up:
 
 ```bash
-cd web
-cp .env.local.example .env.local
-npm install
-npm run dev
+export PYTHONPATH="$PWD"
+python -m src.logging.live_metrics_logger --base-url http://127.0.0.1:8000
 ```
 
-Open: [http://localhost:3000](http://localhost:3000)
-
-By default Next.js uses `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`.
-
-## Live Metrics Logger
-
-```bash
-python experiment/live_metrics_logger.py --base-url http://localhost:8000
-```
-
-This writes session artifacts into `experiment/results/live_session_<timestamp>/`.
-
-## 15-Pair Experiment Protocol
-
-- Runlist: `experiment/commands_dynamic_15.csv`
-- Scoring template: `experiment/operator_scores_template.csv`
-- Playbook and rubric: `experiment/dynamic_10_protocol.md`
-
-Post-run analysis:
-
-```bash
-python experiment/analyze_results.py \
-  --input-dir experiment/results/<session_id> \
-  --labels experiment/results/<session_id>/operator_scores.csv
-```
+Writes under `results/live_session_<timestamp>/`: `events.jsonl`, `per_command.csv`, and `manifest.json`. Use `--output-dir` for a fixed folder.

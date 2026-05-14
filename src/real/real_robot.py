@@ -21,6 +21,15 @@ def _resolve_port() -> str:
     return os.getenv("ROBOT_SERIAL_PORT", "/dev/ttyUSB0")
 
 
+def _resolve_baudrate(default: int = 115200) -> int:
+    """USB serial speed; overridden by ROBOT_BAUDRATE if set."""
+    raw = os.getenv("ROBOT_BAUDRATE", str(default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 def _connection_lost_msg(e: Exception) -> str:
     return (
         f"Serial connection lost: {e}. "
@@ -41,15 +50,16 @@ class RealRobot(BaseRobot):
     def __init__(
         self,
         port: str | None = None,
-        baudrate=115200,
+        baudrate: int | None = None,
         left_trim: float | None = None,
         right_trim: float | None = None,
         left_offset: int | None = None,
         right_offset: int | None = None,
     ):
         port = port or _resolve_port()
+        br = baudrate if baudrate is not None else _resolve_baudrate()
         try:
-            self._ser = serial.Serial(port, baudrate, timeout=0.05)
+            self._ser = serial.Serial(port, br, timeout=0.05)
         except (OSError, serial.SerialException) as e:
             raise RobotConnectionError(
                 f"Cannot open serial port {port}: {e}. "

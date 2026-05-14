@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import threading
 import os
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from src.app.runtime import RobotRuntime, build_runtime_with_mode
@@ -21,7 +18,7 @@ class CommandRequest(BaseModel):
 
 
 class ConnectRequest(BaseModel):
-    method: str = Field(min_length=1, description="real | sim")
+    method: str = Field(min_length=1, description="real")
     serial_port: Optional[str] = None
 
 
@@ -131,15 +128,41 @@ class WebRuntimeState:
             if not plan:
                 self.runtime.memory.add_action_event(
                     "ui_no_plan",
-                    payload={"command": command},
+                    payload={
+                        "command": command,
+                        "execution_mode": mode_norm,
+                        "plan_source": resolved.source,
+                        "plan_message": resolved.message,
+                    },
                 )
                 self.runtime.metrics.record_result(status="failed", error="no_plan")
                 return
 
             self.runtime.world.set_internal_state(moving=True, last_action="plan")
+
+            self.runtime.memory.add_action_event(
+                "command_plan_ready",
+                payload={
+                    "command": command,
+                    "execution_mode": mode_norm,
+                    "plan_source": resolved.source,
+                    "plan_message": resolved.message,
+                    "llm_error": resolved.llm_error,
+                    "rules_error": resolved.rules_error,
+                    "step_count": len(plan),
+                    "steps": plan,
+                    "source_channel": "web_ui",
+                },
+            )
             self.runtime.memory.add_action_event(
                 "llm_plan",
-                payload={"source": "web_ui", "command": command, "steps": plan, "mode": mode_norm},
+                payload={
+                    "source": "web_ui",
+                    "command": command,
+                    "steps": plan,
+                    "mode": mode_norm,
+                    "plan_source": resolved.source,
+                },
             )
 
             if mode_norm == "direct":
@@ -149,16 +172,42 @@ class WebRuntimeState:
                     status=status,
                     safety_violations=int(direct_result.get("safety_violations", 0)),
                 )
+                self.runtime.memory.add_action_event(
+                    "execution_finished",
+                    payload={
+                        "command": command,
+                        "execution_mode": mode_norm,
+                        "executor": "direct_executor",
+                        "plan_source": resolved.source,
+                        "runtime_status": status,
+                        "direct_result": direct_result,
+                    },
+                )
             else:
                 self.runtime.executor.execute_task(raw_command=command, plan=plan)
                 final_status = "interrupted" if self.runtime.executor.runtime_status == "interrupted" else "completed"
                 self.runtime.metrics.record_result(status=final_status)
+                self.runtime.memory.add_action_event(
+                    "execution_finished",
+                    payload={
+                        "command": command,
+                        "execution_mode": mode_norm,
+                        "executor": "robot_executor",
+                        "plan_source": resolved.source,
+                        "runtime_status": self.runtime.executor.runtime_status,
+                        "runtime": self.runtime.executor.get_runtime_status_snapshot(),
+                    },
+                )
         except Exception as exc:
             self.last_error = str(exc)
             if self.runtime is not None:
                 self.runtime.memory.add_action_event(
                     "ui_execution_error",
-                    payload={"command": command, "error": str(exc)},
+                    payload={
+                        "command": command,
+                        "error": str(exc),
+                        "execution_mode": (command_mode or "llm").strip().lower(),
+                    },
                 )
                 self.runtime.metrics.record_result(status="failed", error=str(exc))
         finally:
@@ -178,13 +227,10 @@ app.add_middleware(
 )
 state = WebRuntimeState()
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(str(STATIC_DIR / "index.html"))
+def root() -> Dict[str, Any]:
+    return {"service": "Robot Control API", "docs": "/docs"}
 
 
 @app.get("/api/health")
@@ -265,6 +311,19 @@ def plan_command(req: CommandRequest) -> Dict[str, Any]:
     plan = resolved.steps
     state.last_plan = plan
     state.last_plan_command = command
+    state.runtime.memory.add_action_event(
+        "plan_preview",
+        payload={
+            "command": command,
+            "execution_mode": (req.mode or "llm").strip().lower(),
+            "plan_source": resolved.source,
+            "plan_message": resolved.message,
+            "llm_error": resolved.llm_error,
+            "rules_error": resolved.rules_error,
+            "step_count": len(plan),
+            "steps": plan,
+        },
+    )
     return {
         "command": command,
         "plan": plan,

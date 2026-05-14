@@ -239,16 +239,6 @@ class LLMIntentTranslator:
                     "minimum": 1,
                     "maximum": 20,
                 },
-                "duration": {
-                    "type": "number",
-                    "exclusiveMinimum": 0.0,
-                    "maximum": 30.0,
-                },
-                "repeat": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 20,
-                },
             },
             "required": ["action"],
             "additionalProperties": False,
@@ -291,6 +281,11 @@ class LLMIntentTranslator:
             '  {"plan": [{"action": "turn_left", "speed": 0.5}, {"action": "move_forward", "speed": 0.3, "duration": 1.5, "until": "obstacle_detected"}]}\n\n'
             "For repetition, use step repeat or top-level repeat:\n"
             '  {"plan": [{"action":"turn_left","repeat":2},{"action":"move_forward","duration":1.0}],"repeat":3}\n\n'
+            "CRITICAL for phrases like \"A then B, repeat N times\": the top-level \"repeat\" MUST repeat "
+            "the ENTIRE sequence A+B together, NOT only the last step. Put both A and B inside \"plan\", "
+            "then set \"repeat\" at the root. Example:\n"
+            '  {"plan":[{"action":"move_forward","speed":0.5,"duration":1.0},{"action":"turn_right","speed":0.5,"duration":1.0}],"repeat":3}\n\n'
+            "NEVER attach \"repeat\" only to turn_right when the user asked to repeat forward+turn.\n\n"
             "Rules:\n"
             "- Respond with JSON ONLY. No explanations, no markdown, no code fences.\n"
             "- Turn 180 degrees = two turn_left steps (or two turn_right).\n"
@@ -321,6 +316,9 @@ class LLMIntentTranslator:
         """
         Natural language -> plan (list of commands).
         """
+        pre = self._parse_forward_then_turn_repeat_plan(command)
+        if pre:
+            return pre
         try:
             messages = self.build_plan_messages(command, world_state, memory)
             raw = self.client.complete(messages)
@@ -639,11 +637,87 @@ class LLMIntentTranslator:
         # Absolute safe default: do nothing (stop).
         return ExternalIntentModel(action=Action.STOP)
 
+    def _extract_duration_seconds(self, text: str) -> Optional[float]:
+        patterns = [
+            r"for\s+(\d+(?:\.\d+)?)\s*(?:sec|secs|second|seconds|s)\b",
+            r"(\d+(?:\.\d+)?)\s*(?:sec|secs|second|seconds|s)\b",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, text)
+            if not m:
+                continue
+            try:
+                value = float(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return min(value, 30.0)
+        return None
+
+    def _parse_forward_then_turn_repeat_plan(self, command: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        Deterministic parse for: move forward … then turn left/right …, repeat N times.
+
+        OpenRouter models often emit repeat only on the last step; this fixes that phrasing
+        without relying on the LLM.
+        """
+        text = command.strip().lower()
+        m_rep = re.search(
+            r"repeat\s+(\d+)\s+times?\b|(\d+)\s+times?\s+repeat\b",
+            text,
+        )
+        if not m_rep:
+            return None
+        rep_s = m_rep.group(1) or m_rep.group(2)
+        try:
+            rep = int(rep_s)
+        except (TypeError, ValueError):
+            return None
+        rep = min(max(rep, 1), 20)
+
+        parts = re.split(r"\bthen\b", text, maxsplit=1)
+        if len(parts) < 2:
+            return None
+        before_then, after_then = parts[0].strip(), parts[1].strip()
+
+        if not re.search(r"(?:move|go|drive)\s+forward|\bforward\b", before_then):
+            return None
+
+        d_fwd = self._extract_duration_seconds(before_then)
+        if d_fwd is None:
+            return None
+
+        after_core = re.sub(
+            r",?\s*(?:repeat\s+\d+\s*times?|\d+\s*times?\s+repeat)\s*\.?\s*$",
+            "",
+            after_then,
+        ).strip()
+
+        if re.search(r"turn\s+right", after_core):
+            turn_action = "turn_right"
+        elif re.search(r"turn\s+left", after_core):
+            turn_action = "turn_left"
+        else:
+            return None
+
+        d_turn = self._extract_duration_seconds(after_core)
+        if d_turn is None:
+            return None
+
+        block: List[Dict[str, Any]] = [
+            {"action": "move_forward", "speed": 0.5, "duration": d_fwd},
+            {"action": turn_action, "speed": 0.5, "duration": d_turn},
+        ]
+        return [dict(step) for _ in range(rep) for step in block]
+
     def _rule_based_fallback_plan(self, command: str) -> List[Dict[str, Any]]:
         """
         Heuristic multi-step fallback when LLM is unavailable.
         """
         text = command.lower().strip()
+        pre = self._parse_forward_then_turn_repeat_plan(command)
+        if pre:
+            return pre
         duration = self._extract_duration_seconds(text)
 
         if any(phrase in text for phrase in ["turn 180", "turn around", "180 degrees"]):
@@ -664,23 +738,6 @@ class LLMIntentTranslator:
             ]
 
         return [self._rule_based_fallback(command).to_command_dict()]
-
-    def _extract_duration_seconds(self, text: str) -> Optional[float]:
-        patterns = [
-            r"for\s+(\d+(?:\.\d+)?)\s*(?:sec|secs|second|seconds|s)\b",
-            r"(\d+(?:\.\d+)?)\s*(?:sec|secs|second|seconds|s)\b",
-        ]
-        for pattern in patterns:
-            m = re.search(pattern, text)
-            if not m:
-                continue
-            try:
-                value = float(m.group(1))
-            except (TypeError, ValueError):
-                continue
-            if value > 0:
-                return min(value, 30.0)
-        return None
 
 
 def build_default_translator() -> LLMIntentTranslator:

@@ -130,6 +130,9 @@ dmypy.json
 *~
 .DS_Store
 
+# Session dumps (python -m src.logging.live_metrics_logger)
+results/
+
 # Project specific
 *.pyc
 *.pyo
